@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>音声入力（マイクブリッジ）</title>
+  <style>
+    body { font-family: "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif; margin:0; padding:18px;
+           color:#222; text-align:center; }
+    h1 { font-size:15px; color:#555; margin:0 0 12px; }
+    #talk { width:100%; padding:22px; font-size:18px; border:none; border-radius:12px; color:#fff;
+            background:#c53030; cursor:pointer; }
+    #talk.rec { background:#e53e3e; animation:pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+    #interim { min-height:48px; margin:14px 0; padding:10px; border:1px solid #ddd; border-radius:8px;
+               text-align:left; white-space:pre-wrap; font-size:15px; }
+    .muted { color:#888; font-size:12px; }
+    .err { color:#a8071a; font-size:13px; }
+    .row { display:flex; gap:8px; margin-top:10px; }
+    .row button { flex:1; padding:10px; border:none; border-radius:8px; cursor:pointer; }
+    #send { background:#2b6cb0; color:#fff; }
+    #cancel { background:#eee; color:#333; }
+  </style>
+</head>
+<body>
+  <h1>🎤 ここで話してください（この小窓はトップレベルなのでマイクが使えます）</h1>
+  <button id="talk">押して録音開始</button>
+  <div id="interim" class="muted">認識結果がここに出ます…</div>
+  <div class="row">
+    <button id="send">確定して戻す</button>
+    <button id="cancel">キャンセル</button>
+  </div>
+  <p class="err" id="err"></p>
+  <p class="muted">音声はブラウザの音声認識でテキスト化され、元の画面に文字だけが返されます。</p>
+
+<script>
+  // 親（GAS画面）が発行したワンタイムnonce。返信時にそのまま添えて、なりすまし受信を防ぐ。
+  var NONCE = new URLSearchParams(location.search).get('n') || '';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var recog = null, recording = false, finalText = '';
+
+  if (!SR) {
+    $('err').textContent = 'このブラウザは音声認識に非対応です。元の画面のテキスト入力をご利用ください。';
+    $('talk').disabled = true;
+  }
+
+  function start() {
+    if (recording || !SR) return;
+    finalText = '';
+    recog = new SR();
+    recog.lang = 'ja-JP';
+    recog.interimResults = true;
+    recog.continuous = true;
+    recog.onresult = function (ev) {
+      var interim = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finalText += t; else interim += t;
+      }
+      $('interim').textContent = (finalText + interim) || '…';
+      $('interim').className = '';
+    };
+    recog.onerror = function (ev) {
+      $('err').textContent = '認識エラー: ' + ev.error +
+        (ev.error === 'not-allowed' ? '（この小窓でマイクを「許可」してください）' : '');
+    };
+    recog.onend = function () { if (recording) { try { recog.start(); } catch (e) {} } };
+    try {
+      recog.start();
+      recording = true;
+      $('talk').textContent = '● 録音中（もう一度押すと停止）';
+      $('talk').classList.add('rec');
+    } catch (e) { $('err').textContent = '開始に失敗: ' + e.message; }
+  }
+
+  function stop() {
+    recording = false;
+    if (recog) { try { recog.stop(); } catch (e) {} }
+    $('talk').textContent = '押して録音開始';
+    $('talk').classList.remove('rec');
+  }
+
+  $('talk').addEventListener('click', function () { recording ? stop() : start(); });
+
+  $('send').addEventListener('click', function () {
+    stop();
+    var text = $('interim').textContent.trim();
+    if (window.opener) {
+      // 送るのは利用者自身の発話テキストのみ。受信側（GAS）が origin/source/nonce を厳格検証する。
+      window.opener.postMessage({ type: 'STT_RESULT', nonce: NONCE, text: text }, '*');
+    }
+    window.close();
+  });
+
+  $('cancel').addEventListener('click', function () { stop(); window.close(); });
+</script>
+</body>
+</html>
